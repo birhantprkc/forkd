@@ -1992,14 +1992,15 @@ fn branch_suffix() -> u16 {
 }
 
 /// Short, URL-safe sandbox id. Not crypto-random; the daemon-only loopback
-/// surface doesn't need unguessable ids. Switch to ULID if we ever expose
-/// the API beyond localhost.
+/// surface doesn't need unguessable ids. Keep the counter suffix fixed-width
+/// so logs and dashboard parsers don't see the id shape drift over uptime.
+/// Switch to ULID if we ever expose the API beyond localhost.
 fn new_sandbox_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let ts = unix_now();
-    format!("sb-{ts:x}-{n:04x}")
+    format!("sb-{ts:x}-{n:016x}")
 }
 
 async fn exec_sandbox(
@@ -2800,6 +2801,22 @@ mod tests {
             #[cfg(target_os = "linux")]
             live_in_flight: Mutex::new(HashMap::new()),
         })
+    }
+
+    #[test]
+    fn new_sandbox_id_uses_fixed_width_counter_suffix() {
+        let id = new_sandbox_id();
+        let mut parts = id.split('-');
+        assert_eq!(parts.next(), Some("sb"));
+        let ts = parts.next().expect("timestamp segment");
+        let suffix = parts.next().expect("counter segment");
+        assert!(parts.next().is_none(), "unexpected extra id segment: {id}");
+        assert!(!ts.is_empty(), "timestamp segment must not be empty: {id}");
+        assert_eq!(suffix.len(), 16, "counter suffix must be fixed width: {id}");
+        assert!(
+            suffix.chars().all(|c| c.is_ascii_hexdigit()),
+            "counter suffix must be hex: {id}"
+        );
     }
 
     /// Write a base snapshot directory on disk under `state.snapshot_root`.

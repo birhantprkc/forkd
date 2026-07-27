@@ -23,7 +23,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // Config
@@ -888,11 +888,15 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn wait_for_sock(sock: &Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
+    let mut sleep_for = Duration::from_millis(1);
+    let max_sleep = Duration::from_millis(20);
     while start.elapsed() < timeout {
         if sock.exists() {
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(50));
+        let remaining = timeout.saturating_sub(start.elapsed());
+        thread::sleep(std::cmp::min(sleep_for, remaining));
+        sleep_for = std::cmp::min(sleep_for * 2, max_sleep);
     }
     bail!(
         "socket {} never appeared within {:?}",
@@ -973,7 +977,7 @@ impl Vm {
         let proc = spawn_firecracker(&sock, &console)?;
         let pid = proc.id();
 
-        wait_for_sock(&sock, Duration::from_secs(3))?;
+        wait_for_sock(&sock, Duration::from_secs(10))?;
 
         // If we have static networking, append the kernel ip= parameter so
         // the guest comes up with the right IP without any userspace tools.
@@ -1479,7 +1483,7 @@ impl Snapshot {
             });
         }
         for c in &children {
-            wait_for_sock(&c.sock, Duration::from_secs(5))?;
+            wait_for_sock(&c.sock, Duration::from_secs(10))?;
         }
         let spawn_ms = spawn_start.elapsed().as_millis();
 
@@ -1801,6 +1805,21 @@ mod tests {
         let r = accept_with_deadline(&listener, start + Duration::from_millis(60));
         assert!(r.is_err(), "should time out, got {r:?}");
         assert!(start.elapsed() < Duration::from_secs(2), "must not hang");
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn wait_for_sock_returns_immediately_when_path_exists() {
+        let sock = std::env::temp_dir().join(format!(
+            "forkd-wait-for-sock-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::write(&sock, b"ready").unwrap();
+        wait_for_sock(&sock, Duration::from_secs(10)).unwrap();
         let _ = std::fs::remove_file(&sock);
     }
 
