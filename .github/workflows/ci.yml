@@ -58,3 +58,24 @@ jobs:
           python -m pip install --quiet pytest
           python -m pip install --quiet -e .
           python -m pytest tests/ -q
+
+  mcp-python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp:
+          - 'mcp==1.2.0'
+          # Deliberately tracks the latest compatible 1.x as an early warning.
+          - 'mcp>=1.2,<2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: stdio handshake
+        run: >-
+          uv run --isolated --no-project
+          --with-editable ./sdk/mcp
+          --with anyio
+          --with pytest
+          --with '${{ matrix.mcp }}'
+          pytest -q sdk/mcp/tests/test_stdio.py
